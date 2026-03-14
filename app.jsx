@@ -44,7 +44,10 @@ const ISSUE_CATEGORIES = {
         { id: "crit3", label: "Domain expired", impact: "their web address leads nowhere — any existing SEO equity is evaporating" },
     ],
 };
-
+const ISSUE_CATEGORIES_ENTRIES = [
+    ["Critical (Jackpot)", ISSUE_CATEGORIES["Critical (Jackpot)"]],
+    ...Object.entries(ISSUE_CATEGORIES).filter(([k]) => k !== "Critical (Jackpot)")
+];
 const CADENCE = { 1: 0, 2: 3, 3: 7 };
 
 const STATUS_CONFIG = {
@@ -504,22 +507,41 @@ export default function App() {
                                     <div>
                                         <div style={{ ...card, padding: "16px 20px", marginBottom: "16px" }}>
                                             <div style={{ fontSize: "13px", fontWeight: 600, color: "#f8fafc", marginBottom: "4px" }}>How this works</div>
-                                            <div style={{ fontSize: "12px", color: "#94a3b8", lineHeight: 1.6 }}>Check the issues you found on their site below. Pick 2-3 (the first one you select is treated as the biggest problem). Then hit Generate and copy the prompt into your LLM.</div>
+                                            <div style={{ fontSize: "12px", color: "#94a3b8", lineHeight: 1.6 }}>Check the issues you found on their site below. Pick 2-3 (the first one you select is treated as the biggest problem). <b>If you select a Jackpot issue, it instantly overrides everything else.</b> Then hit Generate and copy the prompt into your LLM.</div>
                                         </div>
-                                        <div style={{ fontSize: "12px", color: selectedIssues.length >= 2 ? "#10b981" : "#f59e0b", marginBottom: "16px", fontWeight: 600 }}>
-                                            {selectedIssues.length === 0 && "Select at least 2 issues"}{selectedIssues.length === 1 && "Select at least 1 more"}{selectedIssues.length >= 2 && `${selectedIssues.length} issues selected — ready to generate`}{selectedIssues.length > 3 && " (3 max recommended)"}
+                                        <div style={{ fontSize: "12px", color: (selectedIssues.some(iss => iss.id.startsWith("crit")) || selectedIssues.length >= 2) ? "#10b981" : "#f59e0b", marginBottom: "16px", fontWeight: 600 }}>
+                                            {selectedIssues.some(i => i.id.startsWith("crit")) ? "Jackpot issue selected — ready to generate!" : (selectedIssues.length === 0 ? "Select at least 2 issues" : (selectedIssues.length === 1 ? "Select at least 1 more" : (selectedIssues.length >= 2 ? `${selectedIssues.length} issues selected — ready to generate` : "")))}
+                                            {selectedIssues.length > 3 && !selectedIssues.some(i => i.id.startsWith("crit")) && " (3 max recommended)"}
                                         </div>
-                                        {selectedIssues.length > 0 && <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "20px" }}>{selectedIssues.map((iss, i) => (<div key={iss.id} style={{ padding: "6px 12px", background: "#1e3a5f", border: "1px solid #3b82f6", borderRadius: "6px", fontSize: "12px", color: "#93c5fd", display: "flex", alignItems: "center", gap: "8px" }}><span style={{ fontSize: "10px", fontWeight: 700, color: "#3b82f6" }}>#{i + 1}</span>{iss.label}<button onClick={() => setSelectedIssues((p) => p.filter((x) => x.id !== iss.id))} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: "14px", padding: 0, marginLeft: "4px" }}>×</button></div>))}</div>}
-                                        {Object.entries(ISSUE_CATEGORIES).map(([cat, issues]) => (
-                                            <div key={cat} style={{ marginBottom: "8px" }}>
-                                                <button onClick={() => setExpandedCategory(expandedCategory === cat ? null : cat)} style={{ width: "100%", padding: "14px 18px", ...card, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: font, color: "#e2e8f0", fontSize: "13px", fontWeight: 600, borderRadius: expandedCategory === cat ? "12px 12px 0 0" : "12px" }}>
-                                                    <span>{cat === "Critical (Jackpot)" ? "🎯 " : ""}{cat}</span>
-                                                    <span style={{ color: "#64748b", fontSize: "12px" }}>{issues.filter((i) => selectedIssues.some((s) => s.id === i.id)).length}/{issues.length} · {expandedCategory === cat ? "▾" : "▸"}</span>
-                                                </button>
-                                                {expandedCategory === cat && <div style={{ background: "#0e0e16", border: "1px solid #1e1e2a", borderTop: "none", borderRadius: "0 0 12px 12px", padding: "12px", display: "grid", gap: "8px" }}>{issues.map((issue) => <IssueChip key={issue.id} issue={issue} selected={selectedIssues.some((s) => s.id === issue.id)} onClick={() => setSelectedIssues((p) => p.some((s) => s.id === issue.id) ? p.filter((s) => s.id !== issue.id) : [...p, issue])} />)}</div>}
-                                            </div>
-                                        ))}
-                                        <div style={{ marginTop: "20px" }}><button onClick={generatePromptText} disabled={selectedIssues.length < 2} style={{ ...btnPrimary, opacity: selectedIssues.length < 2 ? 0.4 : 1, cursor: selectedIssues.length < 2 ? "not-allowed" : "pointer" }}>Generate Prompt ({selectedIssues.length} issues)</button></div>
+                                        {selectedIssues.length > 0 && <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "20px" }}>{selectedIssues.map((iss, i) => (<div key={iss.id} style={{ padding: "6px 12px", background: iss.id.startsWith("crit") ? "#450a0a" : "#1e3a5f", border: iss.id.startsWith("crit") ? "1px solid #ef4444" : "1px solid #3b82f6", borderRadius: "6px", fontSize: "12px", color: iss.id.startsWith("crit") ? "#fca5a5" : "#93c5fd", display: "flex", alignItems: "center", gap: "8px" }}><span style={{ fontSize: "10px", fontWeight: 700, color: iss.id.startsWith("crit") ? "#ef4444" : "#3b82f6" }}>#{i + 1}</span>{iss.label}<button onClick={() => setSelectedIssues((p) => p.filter((x) => x.id !== iss.id))} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: "14px", padding: 0, marginLeft: "4px" }}>×</button></div>))}</div>}
+                                        
+                                        {ISSUE_CATEGORIES_ENTRIES.map(([cat, issues]) => {
+                                            const hasJackpotSelected = selectedIssues.some(iss => iss.id.startsWith("crit"));
+                                            const isJackpotCat = cat === "Critical (Jackpot)";
+                                            if (hasJackpotSelected && !isJackpotCat) return null; // Hide other categories when jackpot is hit
+                                            
+                                            return (
+                                                <div key={cat} style={{ marginBottom: "8px" }}>
+                                                    <button onClick={() => setExpandedCategory(expandedCategory === cat ? null : cat)} style={{ width: "100%", padding: "14px 18px", ...card, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: font, color: "#e2e8f0", fontSize: "13px", fontWeight: 600, borderRadius: expandedCategory === cat ? "12px 12px 0 0" : "12px", border: isJackpotCat ? "1px solid #ef444444" : "1px solid #1e1e2a" }}>
+                                                        <span style={{ color: isJackpotCat ? "#fca5a5" : "inherit" }}>{isJackpotCat ? "🎯 " : ""}{cat}</span>
+                                                        <span style={{ color: "#64748b", fontSize: "12px" }}>{issues.filter((i) => selectedIssues.some((s) => s.id === i.id)).length}/{issues.length} · {expandedCategory === cat ? "▾" : "▸"}</span>
+                                                    </button>
+                                                    {expandedCategory === cat && <div style={{ background: "#0e0e16", border: isJackpotCat ? "1px solid #ef444444" : "1px solid #1e1e2a", borderTop: "none", borderRadius: "0 0 12px 12px", padding: "12px", display: "grid", gap: "8px" }}>
+                                                        {issues.map((issue) => (
+                                                            <IssueChip key={issue.id} issue={issue} selected={selectedIssues.some((s) => s.id === issue.id)} 
+                                                                onClick={() => setSelectedIssues((p) => {
+                                                                    const isSelected = p.some((s) => s.id === issue.id);
+                                                                    if (isSelected) return p.filter((s) => s.id !== issue.id);
+                                                                    if (issue.id.startsWith("crit")) return [issue]; // Override everything
+                                                                    return [...p.filter(x => !x.id.startsWith("crit")), issue]; // Remove jacpots if picking a normal issue
+                                                                })} 
+                                                            />
+                                                        ))}
+                                                    </div>}
+                                                </div>
+                                            );
+                                        })}
+                                        <div style={{ marginTop: "20px" }}><button onClick={generatePromptText} disabled={selectedIssues.length < 2 && !selectedIssues.some(i => i.id.startsWith("crit"))} style={{ ...btnPrimary, opacity: (selectedIssues.length < 2 && !selectedIssues.some(i => i.id.startsWith("crit"))) ? 0.4 : 1, cursor: (selectedIssues.length < 2 && !selectedIssues.some(i => i.id.startsWith("crit"))) ? "not-allowed" : "pointer" }}>Generate Prompt ({selectedIssues.length} issues)</button></div>
                                     </div>
                                 ) : (
                                     <div>
