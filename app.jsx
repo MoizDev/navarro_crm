@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { supabase } from "./src/supabaseClient.js";
 
 const ISSUE_CATEGORIES = {
     "Mobile Experience": [
@@ -69,6 +70,43 @@ const STATUS_ORDER = ["new", "msg1_ready", "msg1_sent", "msg2_due", "msg2_sent",
 function generateId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function daysBetween(d1, d2) { return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24)); }
 
+function dbToLead(row) {
+    return {
+        id:           row.id,
+        name:         row.name,
+        business:     row.business,
+        businessType: row.business_type,
+        url:          row.url,
+        adContent:    row.ad_content,
+        status:       row.status,
+        dateAdded:    new Date(row.date_added),
+        lastAction:   new Date(row.last_action),
+        issues:       row.issues   ?? [],
+        messages:     row.messages ?? { 1: "", 2: "", 3: "" },
+        notes:        row.notes,
+        keyword:      row.keyword,
+    };
+}
+
+function leadToDb(lead, userId) {
+    return {
+        id:            lead.id,
+        user_id:       userId,
+        name:          lead.name,
+        business:      lead.business,
+        business_type: lead.businessType,
+        url:           lead.url,
+        ad_content:    lead.adContent,
+        status:        lead.status,
+        date_added:    lead.dateAdded instanceof Date ? lead.dateAdded.toISOString() : lead.dateAdded,
+        last_action:   lead.lastAction instanceof Date ? lead.lastAction.toISOString() : lead.lastAction,
+        issues:        lead.issues,
+        messages:      lead.messages,
+        notes:         lead.notes,
+        keyword:       lead.keyword,
+    };
+}
+
 const NAV_ITEMS = [
     { key: "dashboard", label: "Dashboard", icon: "◫" },
     { key: "pipeline", label: "Pipeline", icon: "▤" },
@@ -77,28 +115,16 @@ const NAV_ITEMS = [
     { key: "dead", label: "Dead Leads", icon: "◌" },
 ];
 
-export default function App() {
+export default function App({ user }) {
     const [tab, setTab] = useState("dashboard");
-    const [leads, setLeads] = useState(() => {
-        try {
-            const saved = localStorage.getItem("crm_leads");
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                return parsed.map((l) => ({ ...l, dateAdded: new Date(l.dateAdded), lastAction: new Date(l.lastAction) }));
-            }
-        } catch { }
-        return [{ id: "demo1", name: "Mike", business: "Precision HVAC", businessType: "residential HVAC repair in Hamilton", url: "precisionhvac.ca", adContent: "spring AC tune-up special", status: "msg1_sent", dateAdded: new Date(Date.now() - 86400000 * 2), lastAction: new Date(Date.now() - 86400000 * 2), issues: [], messages: { 1: "Hey Mike! I came across your spring AC tune-up ad and clicked through to your site...", 2: "", 3: "" }, notes: "" }];
-    });
-    const [revenue, setRevenue] = useState(() => {
-        try { return parseFloat(localStorage.getItem("crm_revenue")) || 0; } catch { return 0; }
-    });
+    const [loading, setLoading] = useState(true);
+    const [leads, setLeads] = useState([]);
+    const [revenue, setRevenue] = useState(0);
     const [activeLead, setActiveLead] = useState(null);
     const [editingLead, setEditingLead] = useState(null);
     const [showAddLead, setShowAddLead] = useState(false);
     const [newLead, setNewLead] = useState({ name: "", business: "", businessType: "", url: "", adContent: "", notes: "", keyword: "" });
-    const [keywords, setKeywords] = useState(() => {
-        try { const s = localStorage.getItem("crm_keywords"); return s ? JSON.parse(s) : []; } catch { return []; }
-    });
+    const [keywords, setKeywords] = useState([]);
     const [newKeyword, setNewKeyword] = useState("");
     const [promptLead, setPromptLead] = useState(null);
     const [selectedIssues, setSelectedIssues] = useState([]);
@@ -110,9 +136,23 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [copied, setCopied] = useState(false);
 
-    useEffect(() => { try { localStorage.setItem("crm_leads", JSON.stringify(leads)); } catch { } }, [leads]);
-    useEffect(() => { try { localStorage.setItem("crm_revenue", revenue.toString()); } catch { } }, [revenue]);
-    useEffect(() => { try { localStorage.setItem("crm_keywords", JSON.stringify(keywords)); } catch { } }, [keywords]);
+    useEffect(() => {
+        if (!user) return;
+        async function loadData() {
+            setLoading(true);
+            const [leadsRes, settingsRes] = await Promise.all([
+                supabase.from("leads").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+                supabase.from("user_settings").select("*").eq("user_id", user.id).maybeSingle(),
+            ]);
+            if (leadsRes.error)    console.error("leads load error:", leadsRes.error);
+            if (settingsRes.error) console.error("settings load error:", settingsRes.error);
+            setLeads((leadsRes.data ?? []).map(dbToLead));
+            setRevenue(settingsRes.data?.revenue ?? 0);
+            setKeywords(settingsRes.data?.keywords ?? []);
+            setLoading(false);
+        }
+        loadData();
+    }, [user]);
 
     const activeLeads = useMemo(() => leads.filter((l) => l.status !== "dead"), [leads]);
     const deadLeads = useMemo(() => leads.filter((l) => l.status === "dead"), [leads]);
@@ -136,15 +176,84 @@ export default function App() {
         sent: activeLeads.filter((l) => ["msg1_sent", "msg2_sent", "msg3_sent"].includes(l.status)).length,
     }), [activeLeads, deadLeads]);
 
-    const updateLead = useCallback((id, updates) => {
+    const updateLead = useCallback(async (id, updates) => {
+        // Optimistic: apply update immediately
         setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)));
-    }, []);
 
-    const addLead = () => {
+        // Build snake_case partial update for DB
+        const dbUpdates = {};
+        if ("name"         in updates) dbUpdates.name          = updates.name;
+        if ("business"     in updates) dbUpdates.business      = updates.business;
+        if ("businessType" in updates) dbUpdates.business_type = updates.businessType;
+        if ("url"          in updates) dbUpdates.url           = updates.url;
+        if ("adContent"    in updates) dbUpdates.ad_content    = updates.adContent;
+        if ("status"       in updates) dbUpdates.status        = updates.status;
+        if ("dateAdded"    in updates) dbUpdates.date_added    = updates.dateAdded instanceof Date ? updates.dateAdded.toISOString() : updates.dateAdded;
+        if ("lastAction"   in updates) dbUpdates.last_action   = updates.lastAction instanceof Date ? updates.lastAction.toISOString() : updates.lastAction;
+        if ("issues"       in updates) dbUpdates.issues        = updates.issues;
+        if ("messages"     in updates) dbUpdates.messages      = updates.messages;
+        if ("notes"        in updates) dbUpdates.notes         = updates.notes;
+        if ("keyword"      in updates) dbUpdates.keyword       = updates.keyword;
+
+        const { error } = await supabase.from("leads").update(dbUpdates).eq("id", id).eq("user_id", user.id);
+        if (error) {
+            console.error("updateLead error:", error);
+            // Reload from DB to restore consistency
+            const { data } = await supabase.from("leads").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+            if (data) setLeads(data.map(dbToLead));
+        }
+    }, [user]);
+
+    const deleteLead = async (id) => {
+        setLeads((prev) => prev.filter((l) => l.id !== id));
+        setActiveLead(null);
+        const { error } = await supabase.from("leads").delete().eq("id", id).eq("user_id", user.id);
+        if (error) {
+            console.error("deleteLead error:", error);
+            const { data } = await supabase.from("leads").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+            if (data) setLeads(data.map(dbToLead));
+        }
+    };
+
+    const updateRevenue = async (val) => {
+        setRevenue(val);
+        const { error } = await supabase.from("user_settings").upsert(
+            { user_id: user.id, revenue: val },
+            { onConflict: "user_id" }
+        );
+        if (error) console.error("updateRevenue error:", error);
+    };
+
+    const updateKeywords = async (newKeywords) => {
+        setKeywords(newKeywords);
+        const { error } = await supabase.from("user_settings").upsert(
+            { user_id: user.id, keywords: newKeywords },
+            { onConflict: "user_id" }
+        );
+        if (error) console.error("updateKeywords error:", error);
+    };
+
+    const addLead = async () => {
         if (!newLead.name && !newLead.business) return;
-        setLeads((prev) => [{ id: generateId(), ...newLead, status: "new", dateAdded: new Date(), lastAction: new Date(), issues: [], messages: { 1: "", 2: "", 3: "" } }, ...prev]);
+        const lead = {
+            id: generateId(),
+            ...newLead,
+            status: "new",
+            dateAdded: new Date(),
+            lastAction: new Date(),
+            issues: [],
+            messages: { 1: "", 2: "", 3: "" },
+        };
+        // Optimistic: update UI immediately
+        setLeads((prev) => [lead, ...prev]);
         setNewLead({ name: "", business: "", businessType: "", url: "", adContent: "", notes: "", keyword: "" });
         setShowAddLead(false);
+        // Background: persist to Supabase
+        const { error } = await supabase.from("leads").insert(leadToDb(lead, user.id));
+        if (error) {
+            console.error("addLead error:", error);
+            setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+        }
     };
 
     const getNextActionInfo = (lead) => {
@@ -225,6 +334,14 @@ export default function App() {
         </div>
     );
 
+    if (loading) {
+        return (
+            <div style={{ minHeight: "100vh", background: "#0a0a10", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6", fontFamily: font, fontSize: "13px" }}>
+                loading...
+            </div>
+        );
+    }
+
     return (
         <div style={{ display: "flex", minHeight: "100vh", background: "#0a0a10", color: "#e2e8f0", fontFamily: font }}>
             <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -243,7 +360,20 @@ export default function App() {
                         </button>
                     ))}
                 </div>
-                <div style={{ padding: "16px 20px", borderTop: "1px solid #1a1a24", fontSize: "10px", color: "#333" }}>v1.0</div>
+                <div style={{ padding: "16px 20px", borderTop: "1px solid #1a1a24", display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div style={{ fontSize: "10px", color: "#333", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                    <button
+                        onClick={async () => {
+                            setLeads([]);
+                            setRevenue(0);
+                            setKeywords([]);
+                            await supabase.auth.signOut();
+                        }}
+                        style={{ background: "transparent", border: "1px solid #252530", borderRadius: "6px", color: "#475569", cursor: "pointer", fontSize: "10px", padding: "6px 10px", fontFamily: font, textAlign: "left" }}
+                    >
+                        sign out
+                    </button>
+                </div>
             </div>
 
             {/* ─── MAIN CONTENT ─── */}
@@ -268,7 +398,7 @@ export default function App() {
                                 <div style={{ fontSize: "13px", fontWeight: 600, color: "#f8fafc", marginBottom: "16px" }}>Revenue</div>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
                                     <span style={{ fontSize: "32px", fontWeight: 700, color: "#10b981" }}>$</span>
-                                    <input type="number" value={revenue} onChange={(e) => setRevenue(parseFloat(e.target.value) || 0)}
+                                    <input type="number" value={revenue} onChange={(e) => updateRevenue(parseFloat(e.target.value) || 0)}
                                         style={{ ...inputStyle, fontSize: "28px", fontWeight: 700, color: "#10b981", background: "transparent", border: "1px solid #1e1e2a", width: "200px", padding: "8px 12px" }} />
                                 </div>
                                 <div style={{ fontSize: "11px", color: "#475569" }}>Total revenue from converted leads. Edit this manually.</div>
@@ -404,7 +534,7 @@ export default function App() {
                                                     </div>
                                                     <div style={{ display: "flex", gap: "8px" }}>
                                                         <button onClick={(e) => { e.stopPropagation(); setEditingLead(isEditing ? null : lead.id); }} style={{ ...btnGhost, fontSize: "11px", padding: "6px 12px", color: isEditing ? "#3b82f6" : "#94a3b8" }}>{isEditing ? "Done Editing" : "✎ Edit"}</button>
-                                                        <button onClick={(e) => { e.stopPropagation(); if (confirm("Delete this lead?")) { setLeads((p) => p.filter((l) => l.id !== lead.id)); setActiveLead(null); } }} style={{ ...btnGhost, fontSize: "11px", padding: "6px 12px", color: "#ef4444", borderColor: "#ef444433" }}>🗑 Delete</button>
+                                                        <button onClick={(e) => { e.stopPropagation(); if (confirm("Delete this lead?")) deleteLead(lead.id); }} style={{ ...btnGhost, fontSize: "11px", padding: "6px 12px", color: "#ef4444", borderColor: "#ef444433" }}>🗑 Delete</button>
                                                     </div>
                                                 </div>
 
@@ -576,7 +706,7 @@ export default function App() {
                                         <div><span style={{ fontWeight: 600, color: "#94a3b8" }}>{lead.business}</span><span style={{ color: "#475569", marginLeft: "12px", fontSize: "12px" }}>{lead.name} · died {new Date(lead.lastAction).toLocaleDateString()}</span></div>
                                         <div style={{ display: "flex", gap: "8px" }}>
                                             <button onClick={() => updateLead(lead.id, { status: "new", lastAction: new Date() })} style={{ ...btnGhost, fontSize: "11px", padding: "5px 12px", color: "#10b981", borderColor: "#10b98133" }}>Revive</button>
-                                            <button onClick={() => setLeads((prev) => prev.filter((l) => l.id !== lead.id))} style={{ ...btnGhost, fontSize: "11px", padding: "5px 12px", color: "#ef4444", borderColor: "#ef444433" }}>Delete</button>
+                                            <button onClick={() => deleteLead(lead.id)} style={{ ...btnGhost, fontSize: "11px", padding: "5px 12px", color: "#ef4444", borderColor: "#ef444433" }}>Delete</button>
                                         </div>
                                     </div>
                                 ))}
@@ -625,8 +755,8 @@ export default function App() {
                             {/* Add keyword */}
                             <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
                                 <input value={newKeyword} onChange={(e) => setNewKeyword(e.target.value)} placeholder="Add a new keyword..." style={{ ...inputStyle, maxWidth: "300px" }}
-                                    onKeyDown={(e) => { if (e.key === "Enter" && newKeyword.trim() && !keywords.includes(newKeyword.trim())) { setKeywords((p) => [...p, newKeyword.trim()]); setNewKeyword(""); }}} />
-                                <button onClick={() => { if (newKeyword.trim() && !keywords.includes(newKeyword.trim())) { setKeywords((p) => [...p, newKeyword.trim()]); setNewKeyword(""); }}} style={btnPrimary}>+ Add</button>
+                                    onKeyDown={(e) => { if (e.key === "Enter" && newKeyword.trim() && !keywords.includes(newKeyword.trim())) { updateKeywords([...keywords, newKeyword.trim()]); setNewKeyword(""); }}} />
+                                <button onClick={() => { if (newKeyword.trim() && !keywords.includes(newKeyword.trim())) { updateKeywords([...keywords, newKeyword.trim()]); setNewKeyword(""); }}} style={btnPrimary}>+ Add</button>
                             </div>
 
                             {/* All keywords table */}
@@ -642,7 +772,7 @@ export default function App() {
                                             <div style={{ color: "#10b981" }}>{s.replied} <span style={{ fontSize: "10px", color: "#475569" }}>({s.replyRate}%)</span></div>
                                             <div style={{ color: "#06d6a0" }}>{s.meetings}</div>
                                             <div style={{ color: "#fbbf24" }}>{s.converted}</div>
-                                            <button onClick={() => setKeywords((p) => p.filter((k) => k !== s.kw))} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: "14px", padding: 0 }}>×</button>
+                                            <button onClick={() => updateKeywords(keywords.filter((k) => k !== s.kw))} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: "14px", padding: 0 }}>×</button>
                                         </div>
                                     ))}
                                 </div>
