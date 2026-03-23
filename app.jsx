@@ -416,10 +416,10 @@ export default function App({ user }) {
                     {/* Theme toggle */}
                     <button
                         onClick={toggleTheme}
-                        style={{ background: t.bgActive, border: `1px solid ${t.borderIn}`, borderRadius: "6px", color: t.t4, cursor: "pointer", fontSize: "11px", padding: "7px 10px", fontFamily: font, textAlign: "left", display: "flex", alignItems: "center", gap: "6px", transition: "all 0.15s" }}
+                        style={{ background: "transparent", border: "none", color: t.t5, cursor: "pointer", fontSize: "16px", padding: "4px", fontFamily: font, lineHeight: 1, transition: "opacity 0.15s", opacity: 0.7 }}
+                        title={isDark ? "Switch to light mode" : "Switch to dark mode"}
                     >
-                        <span style={{ fontSize: "13px" }}>{isDark ? "☀" : "◐"}</span>
-                        {isDark ? "light mode" : "dark mode"}
+                        {isDark ? "☀" : "◐"}
                     </button>
                     <div style={{ fontSize: "10px", color: t.tDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
                     <button
